@@ -1,2 +1,3 @@
-# gin-template
-template repo with boilerplate gin and containerization
+# Shadow Domain Ledger
+
+MVP for working with domains on a public ledger
