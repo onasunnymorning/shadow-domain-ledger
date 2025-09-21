@@ -48,3 +48,43 @@ type ZoneRegistry struct {
 
 // ZoneRegistryFile is the file where we persist the zone registry
 const ZoneRegistryFile = "zone_collections.json"
+
+// HCS-related structures
+
+// TopicInfo holds information about an HCS topic
+type TopicInfo struct {
+	TopicID     string    `json:"topic_id"`    // Hedera topic ID (e.g., "0.0.123456")
+	TopicName   string    `json:"topic_name"`  // Human readable topic name
+	Description string    `json:"description"` // Topic description
+	CreatedAt   time.Time `json:"created_at"`  // When this topic was created
+	CreatedBy   string    `json:"created_by"`  // Account ID that created this topic
+	AdminKey    string    `json:"admin_key"`   // Admin key for topic management (optional)
+	SubmitKey   string    `json:"submit_key"`  // Submit key for message submission (optional)
+}
+
+// TopicMessage represents a message sent to an HCS topic
+type TopicMessage struct {
+	TopicID        string    `json:"topic_id"`         // Topic the message was sent to
+	SequenceNumber uint64    `json:"sequence_number"`  // Message sequence number in topic
+	ConsensusTime  time.Time `json:"consensus_time"`   // When consensus was reached
+	Message        string    `json:"message"`          // The actual message content
+	RunningHash    string    `json:"running_hash"`     // Topic running hash after this message
+	PayerAccountID string    `json:"payer_account_id"` // Account that paid for the message
+}
+
+// TopicSubscriptionInfo holds subscription configuration
+type TopicSubscriptionInfo struct {
+	TopicID   string    `json:"topic_id"`   // Topic to subscribe to
+	StartTime time.Time `json:"start_time"` // When to start reading from (optional)
+	EndTime   time.Time `json:"end_time"`   // When to stop reading (optional)
+	Limit     int       `json:"limit"`      // Max number of messages to read (optional)
+}
+
+// TopicRegistry tracks HCS topics to avoid duplicates and enable reuse
+type TopicRegistry struct {
+	Topics      map[string]TopicInfo `json:"topics"` // topic name -> topic info
+	LastUpdated time.Time            `json:"last_updated"`
+}
+
+// TopicRegistryFile is the file where we persist the topic registry
+const TopicRegistryFile = "hcs_topics.json"

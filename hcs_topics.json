@@ -1,0 +1,14 @@
+{
+  "topics": {
+    "test-topic": {
+      "topic_id": "0.0.6880130",
+      "topic_name": "test-topic",
+      "description": "Demo topic for test-topic domain events",
+      "created_at": "2025-09-20T19:53:08.874458-05:00",
+      "created_by": "0.0.5332375",
+      "admin_key": "3036301006072a8648ce3d020106052b8104000a03220003bc76fb15b71ad6793bfffc1c6360b5fd4fa9a9b976f9cf468cb178dc3317cb68",
+      "submit_key": ""
+    }
+  },
+  "last_updated": "2025-09-20T19:53:08.874813-05:00"
+}

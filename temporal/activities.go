@@ -547,3 +547,309 @@ func (a *Activities) CreateNFTCollectionActivity(ctx context.Context, zone strin
 		CreatedBy:   accountID.String(),
 	}, nil
 }
+
+// ============================================================================
+// HCS (Hedera Consensus Service) Activities
+// ============================================================================
+
+// CreateTopicActivity creates a new HCS topic on Hedera
+func (a *Activities) CreateTopicActivity(ctx context.Context, topicName, description string, enableAdminKey, enableSubmitKey bool) (TopicInfo, error) {
+	fmt.Printf("Creating HCS topic: %s\n", topicName)
+
+	// --- Load Hedera Credentials ---
+	accountID, err := hedera.AccountIDFromString(os.Getenv("HEDERA_ACCOUNT_ID"))
+	if err != nil {
+		return TopicInfo{}, fmt.Errorf("invalid HEDERA_ACCOUNT_ID: %w", err)
+	}
+	privateKey, err := hedera.PrivateKeyFromString(os.Getenv("HEDERA_PRIVATE_KEY"))
+	if err != nil {
+		return TopicInfo{}, fmt.Errorf("invalid HEDERA_PRIVATE_KEY: %w", err)
+	}
+
+	// --- Create Hedera Client ---
+	client := hedera.ClientForTestnet()
+	client.SetOperator(accountID, privateKey)
+
+	// --- Create Topic Transaction ---
+	topicCreateTx := hedera.NewTopicCreateTransaction().
+		SetTopicMemo(description).
+		SetMaxTransactionFee(hedera.NewHbar(5)) // Set reasonable fee
+
+	// Optionally set admin key (allows topic updates/deletion)
+	if enableAdminKey {
+		topicCreateTx.SetAdminKey(privateKey.PublicKey())
+	}
+
+	// Optionally set submit key (restricts who can submit messages)
+	if enableSubmitKey {
+		topicCreateTx.SetSubmitKey(privateKey.PublicKey())
+	}
+
+	// Execute the transaction
+	txResponse, err := topicCreateTx.Execute(client)
+	if err != nil {
+		return TopicInfo{}, fmt.Errorf("failed to execute topic create transaction: %w", err)
+	}
+
+	// Get the receipt
+	receipt, err := txResponse.GetReceipt(client)
+	if err != nil {
+		return TopicInfo{}, fmt.Errorf("failed to get topic create receipt: %w", err)
+	}
+
+	if receipt.TopicID == nil {
+		return TopicInfo{}, fmt.Errorf("topic creation failed: no topic ID in receipt")
+	}
+
+	topicID := receipt.TopicID.String()
+	fmt.Printf("Successfully created HCS topic '%s' with ID: %s\n", topicName, topicID)
+
+	topicInfo := TopicInfo{
+		TopicID:     topicID,
+		TopicName:   topicName,
+		Description: description,
+		CreatedAt:   time.Now(),
+		CreatedBy:   accountID.String(),
+	}
+
+	if enableAdminKey {
+		topicInfo.AdminKey = privateKey.PublicKey().String()
+	}
+	if enableSubmitKey {
+		topicInfo.SubmitKey = privateKey.PublicKey().String()
+	}
+
+	// Store in topic registry for future use
+	err = a.registerTopic(topicInfo)
+	if err != nil {
+		fmt.Printf("Warning: Could not register topic in registry: %v\n", err)
+	}
+
+	return topicInfo, nil
+}
+
+// SendMessageToTopicActivity sends a message to an HCS topic
+func (a *Activities) SendMessageToTopicActivity(ctx context.Context, topicID, message string) (TopicMessage, error) {
+	fmt.Printf("Sending message to topic %s: %s\n", topicID, message)
+
+	// --- Load Hedera Credentials ---
+	accountID, err := hedera.AccountIDFromString(os.Getenv("HEDERA_ACCOUNT_ID"))
+	if err != nil {
+		return TopicMessage{}, fmt.Errorf("invalid HEDERA_ACCOUNT_ID: %w", err)
+	}
+	privateKey, err := hedera.PrivateKeyFromString(os.Getenv("HEDERA_PRIVATE_KEY"))
+	if err != nil {
+		return TopicMessage{}, fmt.Errorf("invalid HEDERA_PRIVATE_KEY: %w", err)
+	}
+
+	// --- Parse Topic ID ---
+	hederaTopicID, err := hedera.TopicIDFromString(topicID)
+	if err != nil {
+		return TopicMessage{}, fmt.Errorf("invalid topic ID: %w", err)
+	}
+
+	// --- Create Hedera Client ---
+	client := hedera.ClientForTestnet()
+	client.SetOperator(accountID, privateKey)
+
+	// --- Send Message Transaction ---
+	messageTx := hedera.NewTopicMessageSubmitTransaction().
+		SetTopicID(hederaTopicID).
+		SetMessage([]byte(message)).
+		SetMaxTransactionFee(hedera.NewHbar(5))
+
+	// Execute the transaction
+	txResponse, err := messageTx.Execute(client)
+	if err != nil {
+		return TopicMessage{}, fmt.Errorf("failed to execute message submit transaction: %w", err)
+	}
+
+	// Get the receipt
+	receipt, err := txResponse.GetReceipt(client)
+	if err != nil {
+		return TopicMessage{}, fmt.Errorf("failed to get message submit receipt: %w", err)
+	}
+
+	fmt.Printf("Successfully sent message to topic %s. Sequence number: %d\n", topicID, receipt.TopicSequenceNumber)
+
+	return TopicMessage{
+		TopicID:        topicID,
+		SequenceNumber: receipt.TopicSequenceNumber,
+		ConsensusTime:  time.Now(), // Approximate - real consensus time comes from mirror node
+		Message:        message,
+		RunningHash:    fmt.Sprintf("%x", receipt.TopicRunningHash), // Convert bytes to hex string
+		PayerAccountID: accountID.String(),
+	}, nil
+}
+
+// SubscribeToTopicActivity subscribes to an HCS topic and reads messages
+func (a *Activities) SubscribeToTopicActivity(ctx context.Context, subscription TopicSubscriptionInfo) ([]TopicMessage, error) {
+	fmt.Printf("Subscribing to topic %s\n", subscription.TopicID)
+
+	// --- Parse Topic ID ---
+	hederaTopicID, err := hedera.TopicIDFromString(subscription.TopicID)
+	if err != nil {
+		return nil, fmt.Errorf("invalid topic ID: %w", err)
+	}
+
+	// --- Create Hedera Client ---
+	client := hedera.ClientForTestnet()
+
+	var messages []TopicMessage
+	messageCount := 0
+
+	// Create subscription query
+	query := hedera.NewTopicMessageQuery().
+		SetTopicID(hederaTopicID).
+		SetMaxAttempts(3)
+
+	// Set start time if specified
+	if !subscription.StartTime.IsZero() {
+		query.SetStartTime(subscription.StartTime)
+	}
+
+	// Set end time if specified
+	if !subscription.EndTime.IsZero() {
+		query.SetEndTime(subscription.EndTime)
+	}
+
+	// Set limit if specified
+	limit := subscription.Limit
+	if limit == 0 {
+		limit = 100 // Default limit to prevent runaway subscriptions
+	}
+
+	fmt.Printf("Starting subscription with limit: %d messages\n", limit)
+
+	// Subscribe and handle messages
+	_, err = query.Subscribe(client, func(message hedera.TopicMessage) {
+		messageCount++
+		fmt.Printf("Received message %d: Sequence %d at %s\n",
+			messageCount, message.SequenceNumber, message.ConsensusTimestamp.Format(time.RFC3339))
+
+		topicMsg := TopicMessage{
+			TopicID:        subscription.TopicID,
+			SequenceNumber: message.SequenceNumber,
+			ConsensusTime:  message.ConsensusTimestamp,
+			Message:        string(message.Contents),
+			RunningHash:    fmt.Sprintf("%x", message.RunningHash), // Convert bytes to hex string
+		}
+		messages = append(messages, topicMsg)
+
+		// Stop if we've reached the limit
+		if messageCount >= limit {
+			fmt.Printf("Reached message limit (%d), stopping subscription\n", limit)
+			return
+		}
+	})
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to subscribe to topic: %w", err)
+	}
+
+	fmt.Printf("Subscription completed. Received %d messages\n", len(messages))
+	return messages, nil
+}
+
+// LookupOrCreateTopicActivity looks up an existing topic or creates a new one
+func (a *Activities) LookupOrCreateTopicActivity(ctx context.Context, topicName, description string, enableAdminKey, enableSubmitKey bool) (TopicInfo, error) {
+	fmt.Printf("Looking up or creating HCS topic: %s\n", topicName)
+
+	// Load the topic registry
+	registry, err := a.loadTopicRegistry()
+	if err != nil {
+		fmt.Printf("Warning: Could not load topic registry: %v. Will create new topic.\n", err)
+	} else {
+		// Check if we already have this topic in our registry
+		if topicInfo, exists := registry.Topics[topicName]; exists {
+			fmt.Printf("Found existing topic '%s' in registry: %s\n", topicName, topicInfo.TopicID)
+			return topicInfo, nil
+		}
+	}
+
+	// No existing topic found, create a new one
+	fmt.Printf("No existing topic found for '%s', creating new topic...\n", topicName)
+	return a.CreateTopicActivity(ctx, topicName, description, enableAdminKey, enableSubmitKey)
+}
+
+// GetTopicInfoActivity retrieves information about a topic from the registry
+func (a *Activities) GetTopicInfoActivity(ctx context.Context, topicName string) (TopicInfo, error) {
+	registry, err := a.loadTopicRegistry()
+	if err != nil {
+		return TopicInfo{}, fmt.Errorf("failed to load topic registry: %w", err)
+	}
+
+	if topicInfo, exists := registry.Topics[topicName]; exists {
+		return topicInfo, nil
+	}
+
+	return TopicInfo{}, fmt.Errorf("topic '%s' not found in registry", topicName)
+}
+
+// loadTopicRegistry loads the topic registry from a JSON file
+func (a *Activities) loadTopicRegistry() (*TopicRegistry, error) {
+	data, err := os.ReadFile(TopicRegistryFile)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return &TopicRegistry{
+				Topics:      make(map[string]TopicInfo),
+				LastUpdated: time.Now(),
+			}, nil
+		}
+		return nil, err
+	}
+
+	var registry TopicRegistry
+	err = json.Unmarshal(data, &registry)
+	if err != nil {
+		return nil, err
+	}
+
+	return &registry, nil
+}
+
+// saveTopicRegistry saves the topic registry to a JSON file
+func (a *Activities) saveTopicRegistry(registry *TopicRegistry) error {
+	registry.LastUpdated = time.Now()
+	data, err := json.MarshalIndent(registry, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(TopicRegistryFile, data, 0644)
+}
+
+// registerTopic adds a topic to the registry
+func (a *Activities) registerTopic(topicInfo TopicInfo) error {
+	registry, err := a.loadTopicRegistry()
+	if err != nil {
+		return err
+	}
+
+	registry.Topics[topicInfo.TopicName] = topicInfo
+	return a.saveTopicRegistry(registry)
+}
+
+// CheckTopicRegistryActivity provides information about registered topics for debugging
+func (a *Activities) CheckTopicRegistryActivity(ctx context.Context) error {
+	fmt.Println("=== HCS Topic Registry Status ===")
+
+	registry, err := a.loadTopicRegistry()
+	if err != nil {
+		fmt.Printf("Error loading topic registry: %v\n", err)
+		return err
+	}
+
+	fmt.Printf("Total registered topics: %d\n", len(registry.Topics))
+	fmt.Printf("Registry last updated: %s\n", registry.LastUpdated.Format(time.RFC3339))
+
+	if len(registry.Topics) > 0 {
+		fmt.Println("Registered topics:")
+		for name, info := range registry.Topics {
+			fmt.Printf("  - %s: %s (created %s)\n",
+				name, info.TopicID, info.CreatedAt.Format(time.RFC3339))
+		}
+	}
+
+	fmt.Println("=== End Topic Registry ===")
+	return nil
+}

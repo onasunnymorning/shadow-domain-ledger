@@ -29,6 +29,7 @@ func main() {
 
 	// Register the Workflow and Activities
 	w.RegisterWorkflow(temporal.IngestFileWorkflow)
+	w.RegisterWorkflow(temporal.HCSDemoWorkflow)
 	w.RegisterActivity(&temporal.Activities{})
 
 	// Start listening to the Task Queue
