@@ -62,12 +62,12 @@ parses them, groups by zones, and mints NFTs for each domain.`,
 	Args: cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		filePath := args[0]
-		
+
 		// Check if file exists
 		if _, err := os.Stat(filePath); os.IsNotExist(err) {
 			log.Fatalf("File does not exist: %s", filePath)
 		}
-		
+
 		// Workflow options
 		workflowOptions := client.StartWorkflowOptions{
 			ID:        "domain-ingest-workflow_" + filePath,
@@ -101,7 +101,7 @@ creates a topic, sends messages, and demonstrates subscription functionality.`,
 	Args: cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		topicName := args[0]
-		
+
 		// Workflow options
 		workflowOptions := client.StartWorkflowOptions{
 			ID:        "hcs-demo-workflow_" + topicName,
